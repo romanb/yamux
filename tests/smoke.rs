@@ -128,7 +128,7 @@ impl From<Msg> for Bytes {
 
 impl Arbitrary for Msg {
     fn arbitrary<G: Gen>(g: &mut G) -> Msg {
-        let n: usize = g.gen_range(1, 100);
+        let n: usize = g.gen_range(1, g.size());
         let mut v = vec![0; n];
         g.fill(&mut v[..]);
         Msg(v)
