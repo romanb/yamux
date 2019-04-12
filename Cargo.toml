@@ -23,3 +23,5 @@ void = "1.0.2"
 [dev-dependencies]
 quickcheck = "0.8.2"
 tokio = "0.1.17"
+log = "*"
+env_logger = "*"
