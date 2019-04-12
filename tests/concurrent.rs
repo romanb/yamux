@@ -49,7 +49,7 @@ fn roundtrip(addr: SocketAddr, nstreams: u64, nmessages: usize, data: Bytes) {
                         .send(d.clone())
                         .and_then(|mut sink| future::poll_fn(move || sink.close()))
                         .and_then(move |()| stream.fold(0usize, |acc, _| future::ok::<_, io::Error>(acc + 1)))
-                        .map(move |frame| t.unbounded_send(frame).expect("send to channel"))
+                        .map(move |n| t.unbounded_send(n).expect("send to channel"))
                 };
                 e1.spawn(f.map_err(|e| panic!("client error: {}", e)));
             }
