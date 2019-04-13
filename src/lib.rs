@@ -84,7 +84,7 @@ impl Default for Config {
             receive_window: DEFAULT_CREDIT,
             max_buffer_size: 1024 * 1024,
             max_num_streams: 8192,
-            max_pending_frames: 8192,
+            max_pending_frames: 32000,
             window_update_mode: WindowUpdateMode::OnReceive,
             read_after_close: true
         }
