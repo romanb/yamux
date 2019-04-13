@@ -1,5 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use futures::{future, prelude::*, sync::mpsc};
+use futures::{future, prelude::*, sync::mpsc, try_ready};
 use std::{io, iter, net::SocketAddr};
 use tokio::{codec::{LengthDelimitedCodec, Framed}, net::{TcpListener, TcpStream}, runtime::Runtime};
 use yamux::{Config, Connection, Mode};
@@ -8,6 +8,8 @@ fn roundtrip(addr: SocketAddr, nstreams: u64, nmessages: usize, data: Bytes) {
     let rt = Runtime::new().expect("runtime");
     let e1 = rt.executor();
     let e2 = rt.executor();
+
+    let msg_len = data.len();
 
     let server = TcpListener::bind(&addr).expect("tcp bind").incoming()
         .into_future()
@@ -25,6 +27,7 @@ fn roundtrip(addr: SocketAddr, nstreams: u64, nmessages: usize, data: Bytes) {
     let client = TcpStream::connect(&addr)
         .from_err()
         .and_then(move |sock| {
+            sock.set_nodelay(true).unwrap();
             let (tx, rx) = mpsc::unbounded();
             let c = Connection::new(e2.clone(), sock, Config::default(), Mode::Client).expect("connection");
             for _ in 0 .. nstreams {
@@ -35,21 +38,25 @@ fn roundtrip(addr: SocketAddr, nstreams: u64, nmessages: usize, data: Bytes) {
                     let (sink, stream) = Framed::new(stream, LengthDelimitedCodec::new()).split();
                     // a) send and receive `nmessages` one-by-one
                     // futures::stream::iter_ok(iter::repeat(d).take(nmessages))
-                    //     .fold((sink, stream, 0usize), |(sink, stream, acc), d|
-                    //         sink.send(d).and_then(move |mut sink|
+                    //     .fold((sink, stream, 0usize), |(sink, stream, n), d|
+                    //         sink.send(d).and_then(move |sink|
                     //             stream.into_future().map_err(|(e,_)| e)
-                    //                 .map(move |(d, s)| (sink, s, acc + 1))))
+                    //                 .map(move |(d, stream)| {
+                    //                     let n = n + d.map_or(0, |d| d.len());
+                    //                     (sink, stream, n)
+                    //                 })))
                     //     .and_then(|(mut sink, _stream, n)|
-                    //         future::poll_fn(move || sink.close())
-                    //             .map(move |()| n))
-                    //     .map(move |n| t.unbounded_send(n).expect("send to channel"))
-                    //     .from_err()
+                    //         future::poll_fn(move || {
+                    //             try_ready!(sink.close());
+                    //             t.unbounded_send(n).expect("send to channel");
+                    //             Ok(Async::Ready(()))
+                    //         }))
 
                     // b) send `nmessages` and then receive `nmessages`
                     sink.with_flat_map(move |d| futures::stream::iter_ok(iter::repeat(d).take(nmessages)))
                         .send(d.clone())
                         .and_then(|mut sink| future::poll_fn(move || sink.close()))
-                        .and_then(move |()| stream.fold(0usize, |acc, _| future::ok::<_, io::Error>(acc + 1)))
+                        .and_then(move |()| stream.fold(0usize, |n, d| future::ok::<_, io::Error>(n + d.len())))
                         .map(move |n| t.unbounded_send(n).expect("send to channel"))
                         .from_err()
                 });
@@ -59,7 +66,8 @@ fn roundtrip(addr: SocketAddr, nstreams: u64, nmessages: usize, data: Bytes) {
                 .map_err(|()| panic!("channel interrupted"))
                 .fold(0, |acc, n| Ok::<_, yamux::Error>(acc + n))
                 .and_then(move |n| {
-                    assert_eq!(n, nstreams as usize * nmessages);
+                    println!("Bytes sent/received: {:?}", n);
+                    assert_eq!(n, nstreams as usize * nmessages * msg_len);
                     std::mem::drop(c);
                     Ok::<_, yamux::Error>(())
                 })
@@ -72,6 +80,6 @@ fn roundtrip(addr: SocketAddr, nstreams: u64, nmessages: usize, data: Bytes) {
 #[test]
 fn concurrent_streams() {
     env_logger::init();
-    let data = std::iter::repeat(0x42u8).take(100 * 1024).collect::<Vec<_>>().into();
-    roundtrip("127.0.0.1:9000".parse().expect("valid address"), 1000, 10, data)
+    let data = std::iter::repeat(0x42u8).take(1000 * 1024).collect::<Vec<_>>().into();
+    roundtrip("127.0.0.1:9000".parse().expect("valid address"), 1000, 1, data)
 }
